@@ -29,13 +29,14 @@
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script>
     // 1. 地図の初期化
+    // 地図の初期化などはそのまま
     const map = L.map('map').setView([70, 0], 2);
     L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', { attribution: '&copy; CartoDB' }).addTo(map);
     let auroraLayer = L.layerGroup().addTo(map);
 
-    // 直接取得用の関数（プロキシを排除）
     async function fetchJSON(url) {
-        const response = await fetch(url);
+        // cache: "no-store" を追加して不完全なキャッシュを回避
+        const response = await fetch(url, { cache: "no-store" });
         if (!response.ok) throw new Error('HTTP Error: ' + response.status);
         return await response.json();
     }
@@ -45,30 +46,55 @@
         statusEl.innerText = "Updating...";
 
         try {
-            // プロキシを通さずNOAAから直接取得
-            const magData = await fetchJSON('https://services.swpc.noaa.gov/products/solar-wind/mag-1-day.json');
-            const plasmaData = await fetchJSON('https://services.swpc.noaa.gov/products/solar-wind/plasma-1-day.json');
-            const auroraData = await fetchJSON('https://services.swpc.noaa.gov/json/aurora_forecast_30_minute.json');
+            // 磁場データ
+            const magData = await fetchJSON('https://services.swpc.noaa.gov/products/solar-wind/mag-1-day.json').catch(e => {
+                console.warn("Mag data error:", e); return null;
+            });
+            
+            // プラズマデータ
+            const plasmaData = await fetchJSON('https://services.swpc.noaa.gov/products/solar-wind/plasma-1-day.json').catch(e => {
+                console.warn("Plasma data error:", e); return null;
+            });
 
-            const latestMag = magData[magData.length - 1];
-            const latestPlasma = plasmaData[plasmaData.length - 1];
-            const bz = parseFloat(latestMag[4]);
+            // 表示の更新
+            if (magData && plasmaData) {
+                const latestMag = magData[magData.length - 1];
+                const latestPlasma = plasmaData[plasmaData.length - 1];
+                const bz = parseFloat(latestMag[4]);
 
-            document.getElementById('stats-container').innerHTML = `
-                <div class="stat-card">
-                    <div class="stat-label">IMF Bz (磁場南北)</div>
-                    <div class="stat-value ${bz < 0 ? 'status-good' : ''}">${bz.toFixed(2)} nT</div>
-                </div>
-                <div class="stat-card">
-                    <div class="stat-label">Solar Wind Speed</div>
-                    <div class="stat-value">${parseFloat(latestPlasma[2]).toFixed(0)} km/s</div>
-                </div>
-                <div class="stat-card">
-                    <div class="stat-label">Particle Density</div>
-                    <div class="stat-value">${parseFloat(latestPlasma[1]).toFixed(1)} p/cm³</div>
-                </div>
-            `;
+                document.getElementById('stats-container').innerHTML = `
+                    <div class="stat-card">
+                        <div class="stat-label">IMF Bz (磁場南北)</div>
+                        <div class="stat-value ${bz < 0 ? 'status-good' : ''}">${bz.toFixed(2)} nT</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-label">Solar Wind Speed</div>
+                        <div class="stat-value">${parseFloat(latestPlasma[2]).toFixed(0)} km/s</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-label">Particle Density</div>
+                        <div class="stat-value">${parseFloat(latestPlasma[1]).toFixed(1)} p/cm³</div>
+                    </div>
+                `;
+            }
 
+            // オーロラ予報データ（ここが一番壊れやすい）
+            try {
+                const auroraData = await fetchJSON('https://services.swpc.noaa.gov/json/aurora_forecast_30_minute.json');
+                drawAurora(auroraData);
+                statusEl.innerText = "Last Update: " + new Date().toLocaleTimeString();
+            } catch (auroraError) {
+                console.error("Aurora Map JSON error (incomplete data):", auroraError);
+                statusEl.innerText = "Map data incomplete, retrying next time...";
+            }
+
+        } catch (e) {
+            console.error("Global Error:", e);
+            statusEl.innerText = "Error: " + e.message;
+        }
+    }
+    
+    // drawAurora 関数はそのまま（前回のものを使用）
             drawAurora(auroraData);
             statusEl.innerText = "Last Update: " + new Date().toLocaleTimeString();
 
@@ -110,3 +136,4 @@
 </script>
 </body>
 </html>
+
