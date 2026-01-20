@@ -2,7 +2,7 @@
 <html lang="ja">
 <head>
     <meta charset="UTF-8">
-    <title>Aurora Debug Monitor</title>
+    <title>Aurora Live Monitor</title>
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
     <style>
         body { font-family: sans-serif; margin: 0; background: #0d1117; color: #e6edf3; }
@@ -12,14 +12,15 @@
         .stat-card { background: #0d1117; padding: 15px; border-radius: 8px; margin-bottom: 10px; border: 1px solid #30363d; }
         .stat-value { font-size: 1.5rem; color: #58a6ff; font-family: monospace; }
         .stat-label { font-size: 0.8rem; color: #8b949e; }
+        .status-good { color: #3fb950; }
     </style>
 </head>
 <body>
 
 <div id="dashboard">
     <div id="sidebar">
-        <h2>Aurora Debug</h2>
-        <div id="status-msg" style="color: yellow; font-size: 0.8rem; margin-bottom: 10px;">Initializing...</div>
+        <h2>Aurora Monitor</h2>
+        <div id="status-msg" style="color: #3fb950; font-size: 0.8rem; margin-bottom: 10px;">Connecting...</div>
         <div id="stats-container"></div>
     </div>
     <div id="map"></div>
@@ -27,94 +28,85 @@
 
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script>
-    console.log("App Started");
-    const statusEl = document.getElementById('status-msg');
-
-    // 地図の初期化
+    // 1. 地図の初期化
     const map = L.map('map').setView([70, 0], 2);
     L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', { attribution: '&copy; CartoDB' }).addTo(map);
     let auroraLayer = L.layerGroup().addTo(map);
 
-    // テスト用の赤い四角（地図が動いているか確認用）
-    L.rectangle([[65, -10], [75, 10]], {color: "red", weight: 1, fillOpacity: 0.3}).addTo(map)
-        .bindPopup("Test Area (North Pole)");
-
-    const PROXY_BASE = "https://api.allorigins.win/get?url=";
-
+    // 直接取得用の関数（プロキシを排除）
     async function fetchJSON(url) {
-        console.log("Fetching:", url);
-        const response = await fetch(`${PROXY_BASE}${encodeURIComponent(url)}`);
-        if (!response.ok) throw new Error('Fetch failed for ' + url);
-        const data = await response.json();
-        return JSON.parse(data.contents);
+        const response = await fetch(url);
+        if (!response.ok) throw new Error('HTTP Error: ' + response.status);
+        return await response.json();
     }
 
     async function updateDashboard() {
-        statusEl.innerText = "Fetching data...";
+        const statusEl = document.getElementById('status-msg');
+        statusEl.innerText = "Updating...";
+
         try {
+            // プロキシを通さずNOAAから直接取得
             const magData = await fetchJSON('https://services.swpc.noaa.gov/products/solar-wind/mag-1-day.json');
             const plasmaData = await fetchJSON('https://services.swpc.noaa.gov/products/solar-wind/plasma-1-day.json');
             const auroraData = await fetchJSON('https://services.swpc.noaa.gov/json/aurora_forecast_30_minute.json');
 
-            console.log("Data received successfully");
-
-            // 数値表示
             const latestMag = magData[magData.length - 1];
             const latestPlasma = plasmaData[plasmaData.length - 1];
-            
+            const bz = parseFloat(latestMag[4]);
+
             document.getElementById('stats-container').innerHTML = `
                 <div class="stat-card">
-                    <div class="stat-label">Bz</div>
-                    <div class="stat-value">${parseFloat(latestMag[4]).toFixed(2)} nT</div>
+                    <div class="stat-label">IMF Bz (磁場南北)</div>
+                    <div class="stat-value ${bz < 0 ? 'status-good' : ''}">${bz.toFixed(2)} nT</div>
                 </div>
                 <div class="stat-card">
-                    <div class="stat-label">Speed</div>
+                    <div class="stat-label">Solar Wind Speed</div>
                     <div class="stat-value">${parseFloat(latestPlasma[2]).toFixed(0)} km/s</div>
                 </div>
                 <div class="stat-card">
-                    <div class="stat-label">Density</div>
+                    <div class="stat-label">Particle Density</div>
                     <div class="stat-value">${parseFloat(latestPlasma[1]).toFixed(1)} p/cm³</div>
                 </div>
             `;
 
             drawAurora(auroraData);
-            statusEl.innerText = "Updated: " + new Date().toLocaleTimeString();
+            statusEl.innerText = "Last Update: " + new Date().toLocaleTimeString();
 
         } catch (e) {
-            console.error("Critical Error:", e);
+            console.error(e);
             statusEl.innerText = "Error: " + e.message;
+            statusEl.style.color = "#f85149";
         }
     }
 
     function drawAurora(data) {
         auroraLayer.clearLayers();
         const coords = data.coordinates;
-        console.log("Drawing aurora. Points:", coords.length);
-
-        let drawCount = 0;
+        
         coords.forEach(p => {
-            let lon = p[0]; 
+            let lon = p[0];
             let lat = p[1];
             const prob = p[2];
 
-            // 重要：NOAAの経度 0~360 を Leafletの -180~180 に変換
             if (lon > 180) lon -= 360;
 
-            if (prob > 0) {
-                drawCount++;
+            if (prob > 2) { // 2%以上で描画
+                let color = '#00ff00';
+                if (prob > 20) color = '#ffff00';
+                if (prob > 50) color = '#ff0000';
+
                 L.rectangle([[lat, lon], [lat + 2, lon + 2]], {
-                    color: '#00ff00',
+                    color: color,
                     weight: 0,
-                    fillOpacity: Math.max(prob / 100, 0.1),
+                    fillOpacity: Math.max(prob / 100, 0.15),
                     interactive: false
                 }).addTo(auroraLayer);
             }
         });
-        console.log("Actually drawn rectangles:", drawCount);
     }
 
     updateDashboard();
-    setInterval(updateDashboard, 300000);
+    setInterval(updateDashboard, 300000); // 5分ごと
 </script>
 </body>
 </html>
