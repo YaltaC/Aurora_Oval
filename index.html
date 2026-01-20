@@ -26,7 +26,7 @@
         <div id="status-msg">Initializing...</div>
         <div id="stats-container"></div>
         <div style="margin-top: 20px; font-size: 0.7rem; color: #484f58;">
-            ※地図が表示されない場合は太陽活動の静穏期です。
+            ※地図に緑の帯が出ない場合は、現在オーロラ活動が非常に穏やかであることを示します。
         </div>
     </div>
     <div id="map"></div>
@@ -43,6 +43,7 @@
 
     // 2. 通信関数
     async function fetchJSON(url) {
+        // cache: "no-store" で不完全なデータを防ぐ
         const response = await fetch(url, { cache: "no-store" });
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
         return await response.json();
@@ -52,28 +53,30 @@
     async function updateDashboard() {
         const statusEl = document.getElementById('status-msg');
         const container = document.getElementById('stats-container');
-        statusEl.innerText = "Connecting to NOAA...";
+        statusEl.innerText = "Checking NOAA server...";
         statusEl.style.color = "yellow";
 
         try {
-            // 個別にフェッチ（一つが死んでも他を生かす）
-            const mag = await fetchJSON('https://services.swpc.noaa.gov/products/solar-wind/mag-1-day.json').catch(e => null);
-            const plasma = await fetchJSON('https://services.swpc.noaa.gov/products/solar-wind/plasma-1-day.json').catch(e => null);
-            const aurora = await fetchJSON('https://services.swpc.noaa.gov/json/ovation_aurora_latest.json').catch(e => null);
+            // A. 数値データの取得（個別にフェッチしてエラーの影響を最小化）
+            const mag = await fetchJSON('https://services.swpc.noaa.gov/products/solar-wind/mag-1-day.json').catch(e => { console.error(e); return null; });
+            const plasma = await fetchJSON('https://services.swpc.noaa.gov/products/solar-wind/plasma-1-day.json').catch(e => { console.error(e); return null; });
+            
+            // B. 地図データの取得（404になりにくいパスに変更）
+            const aurora = await fetchJSON('https://services.swpc.noaa.gov/json/ovation_aurora_latest.json').catch(e => { console.error(e); return null; });
 
             // 数値表示の更新
             let html = "";
             if (mag && mag.length > 0) {
                 const val = mag[mag.length - 1];
                 const bz = parseFloat(val[4]);
-                html += `<div class="stat-card"><div class="stat-label">IMF Bz</div><div class="stat-value ${bz < 0 ? 'status-good' : ''}">${bz.toFixed(2)} nT</div></div>`;
+                html += `<div class="stat-card"><div class="stat-label">IMF Bz (磁場南北)</div><div class="stat-value ${bz < 0 ? 'status-good' : ''}">${bz.toFixed(2)} nT</div></div>`;
             }
             if (plasma && plasma.length > 0) {
                 const val = plasma[plasma.length - 1];
                 html += `<div class="stat-card"><div class="stat-label">Wind Speed</div><div class="stat-value">${parseFloat(val[2]).toFixed(0)} km/s</div></div>`;
                 html += `<div class="stat-card"><div class="stat-label">Density</div><div class="stat-value">${parseFloat(val[1]).toFixed(1)} p/cm³</div></div>`;
             }
-            container.innerHTML = html || "Data temporarily unavailable";
+            container.innerHTML = html || "Waiting for solar wind data...";
 
             // 地図の更新
             if (aurora && aurora.coordinates) {
@@ -81,11 +84,12 @@
                 statusEl.innerText = "● Live: " + new Date().toLocaleTimeString();
                 statusEl.style.color = "#3fb950";
             } else {
-                statusEl.innerText = "⚠ Map data error";
+                statusEl.innerText = "⚠ Map data temporarily offline";
+                statusEl.style.color = "orange";
             }
 
         } catch (err) {
-            console.error(err);
+            console.error("Critical:", err);
             statusEl.innerText = "Connection Error";
             statusEl.style.color = "#f85149";
         }
@@ -96,7 +100,7 @@
         auroraLayer.clearLayers();
         const coords = data.coordinates;
         
-        // 描画を最適化（データが多いため、確率10%以上に絞る）
+        // 描画を最適化（確率10%以上に絞る）
         coords.forEach(p => {
             let lon = p[0];
             const lat = p[1];
