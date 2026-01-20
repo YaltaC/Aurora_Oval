@@ -14,7 +14,7 @@
         .stat-value { font-size: 1.6rem; font-weight: bold; color: #58a6ff; font-family: monospace; }
         .stat-label { font-size: 0.75rem; color: #8b949e; text-transform: uppercase; margin-bottom: 4px; }
         .status-good { color: #3fb950; }
-        #status-msg { font-size: 0.8rem; margin-bottom: 15px; padding: 5px; border-radius: 4px; }
+        #status-msg { font-size: 0.8rem; margin-bottom: 15px; padding: 5px; border-radius: 4px; font-weight: bold; }
         h2 { font-size: 1.2rem; margin-top: 0; border-bottom: 1px solid #30363d; padding-bottom: 10px; }
     </style>
 </head>
@@ -23,7 +23,7 @@
 <div id="dashboard">
     <div id="sidebar">
         <h2>Aurora Monitor</h2>
-        <div id="status-msg">Initializing...</div>
+        <div id="status-msg">Connecting...</div>
         <div id="stats-container"></div>
         <div style="margin-top: 20px; font-size: 0.7rem; color: #484f58;">
             ※地図に緑の帯が出ない場合は、現在オーロラ活動が非常に穏やかであることを示します。
@@ -41,57 +41,66 @@
     }).addTo(map);
     let auroraLayer = L.layerGroup().addTo(map);
 
-    // 2. 通信関数
-    async function fetchJSON(url) {
-        // cache: "no-store" で不完全なデータを防ぐ
-        const response = await fetch(url, { cache: "no-store" });
-        if (!response.ok) throw new Error(`HTTP ${response.status}`);
-        return await response.json();
+    // 2. 通信関数（失敗しても例外を投げずnullを返す安全設計）
+    async function safeFetchJSON(url) {
+        try {
+            const response = await fetch(url, { cache: "no-store" });
+            if (!response.ok) return null;
+            return await response.json();
+        } catch (e) {
+            console.warn("Fetch failed for:", url, e);
+            return null;
+        }
     }
 
     // 3. メイン更新処理
     async function updateDashboard() {
         const statusEl = document.getElementById('status-msg');
         const container = document.getElementById('stats-container');
-        statusEl.innerText = "Checking NOAA server...";
+        statusEl.innerText = "Fetching NOAA Data...";
         statusEl.style.color = "yellow";
 
-        try {
-            // A. 数値データの取得（個別にフェッチしてエラーの影響を最小化）
-            const mag = await fetchJSON('https://services.swpc.noaa.gov/products/solar-wind/mag-1-day.json').catch(e => { console.error(e); return null; });
-            const plasma = await fetchJSON('https://services.swpc.noaa.gov/products/solar-wind/plasma-1-day.json').catch(e => { console.error(e); return null; });
-            
-            // B. 地図データの取得（404になりにくいパスに変更）
-            const aurora = await fetchJSON('https://services.swpc.noaa.gov/json/ovation_aurora_latest.json').catch(e => { console.error(e); return null; });
+        // 各データを個別に取得
+        const mag = await safeFetchJSON('https://services.swpc.noaa.gov/products/solar-wind/mag-1-day.json');
+        const plasma = await safeFetchJSON('https://services.swpc.noaa.gov/products/solar-wind/plasma-1-day.json');
+        const aurora = await safeFetchJSON('https://services.swpc.noaa.gov/json/ovation_aurora_latest.json');
 
-            // 数値表示の更新
-            let html = "";
-            if (mag && mag.length > 0) {
-                const val = mag[mag.length - 1];
-                const bz = parseFloat(val[4]);
-                html += `<div class="stat-card"><div class="stat-label">IMF Bz (磁場南北)</div><div class="stat-value ${bz < 0 ? 'status-good' : ''}">${bz.toFixed(2)} nT</div></div>`;
-            }
-            if (plasma && plasma.length > 0) {
-                const val = plasma[plasma.length - 1];
-                html += `<div class="stat-card"><div class="stat-label">Wind Speed</div><div class="stat-value">${parseFloat(val[2]).toFixed(0)} km/s</div></div>`;
-                html += `<div class="stat-card"><div class="stat-label">Density</div><div class="stat-value">${parseFloat(val[1]).toFixed(1)} p/cm³</div></div>`;
-            }
-            container.innerHTML = html || "Waiting for solar wind data...";
+        // サイドバーのHTML組み立て
+        let html = "";
+        
+        if (mag && mag.length > 0) {
+            const val = mag[mag.length - 1];
+            const bz = parseFloat(val[4]);
+            html += `<div class="stat-card">
+                        <div class="stat-label">IMF Bz (磁場南北)</div>
+                        <div class="stat-value ${bz < 0 ? 'status-good' : ''}">${isNaN(bz) ? '--' : bz.toFixed(2)} nT</div>
+                     </div>`;
+        }
 
-            // 地図の更新
-            if (aurora && aurora.coordinates) {
-                drawAurora(aurora);
-                statusEl.innerText = "● Live: " + new Date().toLocaleTimeString();
-                statusEl.style.color = "#3fb950";
-            } else {
-                statusEl.innerText = "⚠ Map data temporarily offline";
-                statusEl.style.color = "orange";
-            }
+        if (plasma && plasma.length > 0) {
+            const val = plasma[plasma.length - 1];
+            const speed = parseFloat(val[2]);
+            const density = parseFloat(val[1]);
+            html += `<div class="stat-card">
+                        <div class="stat-label">Wind Speed</div>
+                        <div class="stat-value">${isNaN(speed) ? '--' : speed.toFixed(0)} km/s</div>
+                     </div>
+                     <div class="stat-card">
+                        <div class="stat-label">Particle Density</div>
+                        <div class="stat-value">${isNaN(density) ? '--' : density.toFixed(1)} p/cm³</div>
+                     </div>`;
+        }
 
-        } catch (err) {
-            console.error("Critical:", err);
-            statusEl.innerText = "Connection Error";
-            statusEl.style.color = "#f85149";
+        container.innerHTML = html || "<p style='font-size:0.8rem; color:orange;'>太陽風データを取得中、または一時的に欠落しています。</p>";
+
+        // 地図の描画
+        if (aurora && aurora.coordinates) {
+            drawAurora(aurora);
+            statusEl.innerText = "● Live: " + new Date().toLocaleTimeString();
+            statusEl.style.color = "#3fb950";
+        } else {
+            statusEl.innerText = "⚠ Map data offline";
+            statusEl.style.color = "orange";
         }
     }
 
@@ -100,12 +109,12 @@
         auroraLayer.clearLayers();
         const coords = data.coordinates;
         
-        // 描画を最適化（確率10%以上に絞る）
         coords.forEach(p => {
             let lon = p[0];
             const lat = p[1];
             const prob = p[2];
 
+            // 確率が高い場所のみ描画
             if (prob > 10) { 
                 if (lon > 180) lon -= 360;
                 let color = prob > 50 ? '#ff4500' : (prob > 25 ? '#ffff00' : '#00ff00');
@@ -120,6 +129,7 @@
         });
     }
 
+    // 実行
     updateDashboard();
     setInterval(updateDashboard, 300000); // 5分周期
 </script>
