@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Aurora Live Monitor - Stable</title>
+    <title>Aurora Live Monitor - World Loop</title>
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
     <style>
         body { font-family: -apple-system, sans-serif; margin: 0; background: #0d1117; color: #e6edf3; }
@@ -26,7 +26,7 @@
         <div id="status-msg">Connecting...</div>
         <div id="stats-container"></div>
         <div style="margin-top: 20px; font-size: 0.7rem; color: #484f58;">
-            ※地図に緑の帯が出ない場合は、現在オーロラ活動が非常に穏やかであることを示します。
+            ※地図を横にスクロールしてもオーバルが表示され続けます。
         </div>
     </div>
     <div id="map"></div>
@@ -34,66 +34,53 @@
 
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script>
-    // 1. 地図のセットアップ
-    const map = L.map('map').setView([70, 0], 2);
+    // 1. 地図のセットアップ（連続スクロール設定）
+    const map = L.map('map', {
+        worldCopyJump: false, // 独自のループ処理を行うためfalseに
+        continuousWorld: true
+    }).setView([70, 0], 2);
+
     L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
-        attribution: '&copy; CartoDB'
+        attribution: '&copy; CartoDB',
+        noWrap: false // 地図タイル自体をループさせる
     }).addTo(map);
+
     let auroraLayer = L.layerGroup().addTo(map);
 
-    // 2. 通信関数（失敗しても例外を投げずnullを返す安全設計）
     async function safeFetchJSON(url) {
         try {
             const response = await fetch(url, { cache: "no-store" });
             if (!response.ok) return null;
             return await response.json();
         } catch (e) {
-            console.warn("Fetch failed for:", url, e);
+            console.warn("Fetch failed:", url);
             return null;
         }
     }
 
-    // 3. メイン更新処理
     async function updateDashboard() {
         const statusEl = document.getElementById('status-msg');
         const container = document.getElementById('stats-container');
         statusEl.innerText = "Fetching NOAA Data...";
         statusEl.style.color = "yellow";
 
-        // 各データを個別に取得
         const mag = await safeFetchJSON('https://services.swpc.noaa.gov/products/solar-wind/mag-1-day.json');
         const plasma = await safeFetchJSON('https://services.swpc.noaa.gov/products/solar-wind/plasma-1-day.json');
         const aurora = await safeFetchJSON('https://services.swpc.noaa.gov/json/ovation_aurora_latest.json');
 
-        // サイドバーのHTML組み立て
         let html = "";
-        
         if (mag && mag.length > 0) {
             const val = mag[mag.length - 1];
             const bz = parseFloat(val[4]);
-            html += `<div class="stat-card">
-                        <div class="stat-label">IMF Bz (磁場南北)</div>
-                        <div class="stat-value ${bz < 0 ? 'status-good' : ''}">${isNaN(bz) ? '--' : bz.toFixed(2)} nT</div>
-                     </div>`;
+            html += `<div class="stat-card"><div class="stat-label">IMF Bz</div><div class="stat-value ${bz < 0 ? 'status-good' : ''}">${bz.toFixed(2)} nT</div></div>`;
         }
-
         if (plasma && plasma.length > 0) {
             const val = plasma[plasma.length - 1];
-            const speed = parseFloat(val[2]);
-            const density = parseFloat(val[1]);
-            html += `<div class="stat-card">
-                        <div class="stat-label">Wind Speed</div>
-                        <div class="stat-value">${isNaN(speed) ? '--' : speed.toFixed(0)} km/s</div>
-                     </div>
-                     <div class="stat-card">
-                        <div class="stat-label">Particle Density</div>
-                        <div class="stat-value">${isNaN(density) ? '--' : density.toFixed(1)} p/cm³</div>
-                     </div>`;
+            html += `<div class="stat-card"><div class="stat-label">Wind Speed</div><div class="stat-value">${parseFloat(val[2]).toFixed(0)} km/s</div></div>`;
+            html += `<div class="stat-card"><div class="stat-label">Density</div><div class="stat-value">${parseFloat(val[1]).toFixed(1)} p/cm³</div></div>`;
         }
+        container.innerHTML = html || "Data unavailable";
 
-        container.innerHTML = html || "<p style='font-size:0.8rem; color:orange;'>太陽風データを取得中、または一時的に欠落しています。</p>";
-
-        // 地図の描画
         if (aurora && aurora.coordinates) {
             drawAurora(aurora);
             statusEl.innerText = "● Live: " + new Date().toLocaleTimeString();
@@ -104,34 +91,39 @@
         }
     }
 
-    // 4. オーロラ描画処理
+    // 4. オーロラ描画処理（無限ループ対応）
     function drawAurora(data) {
         auroraLayer.clearLayers();
         const coords = data.coordinates;
         
         coords.forEach(p => {
-            let lon = p[0];
+            let lon = p[0]; // 0-360
             const lat = p[1];
             const prob = p[2];
 
-            // 確率が高い場所のみ描画
             if (prob > 10) { 
+                // 基本の経度を -180 ~ 180 に変換
                 if (lon > 180) lon -= 360;
+
                 let color = prob > 50 ? '#ff4500' : (prob > 25 ? '#ffff00' : '#00ff00');
-                
-                L.rectangle([[lat, lon], [lat + 2, lon + 2]], {
-                    color: color,
-                    weight: 0,
-                    fillOpacity: prob / 100,
-                    interactive: false
-                }).addTo(auroraLayer);
+                const opacity = prob / 100;
+
+                // 同じ四角形を3カ所（中央・左・右）に描画することでループに対応
+                // これにより、地図をどちらにスクロールしてもオーバルが見える
+                [lon - 360, lon, lon + 360].forEach(offsetLon => {
+                    L.rectangle([[lat, offsetLon], [lat + 2, offsetLon + 2]], {
+                        color: color,
+                        weight: 0,
+                        fillOpacity: opacity,
+                        interactive: false
+                    }).addTo(auroraLayer);
+                });
             }
         });
     }
 
-    // 実行
     updateDashboard();
-    setInterval(updateDashboard, 300000); // 5分周期
+    setInterval(updateDashboard, 300000);
 </script>
 
 </body>
