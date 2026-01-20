@@ -2,117 +2,119 @@
 <html lang="ja">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Aurora Monitor v2</title>
+    <title>Aurora Debug Monitor</title>
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
     <style>
         body { font-family: sans-serif; margin: 0; background: #0d1117; color: #e6edf3; }
         #dashboard { display: grid; grid-template-columns: 320px 1fr; height: 100vh; }
-        #sidebar { padding: 24px; overflow-y: auto; border-right: 1px solid #30363d; background: #161b22; z-index: 1000; }
-        #map { width: 100%; height: 100%; background: #0a0e14; }
-        .stat-card { background: #0d1117; padding: 16px; border-radius: 10px; margin-bottom: 16px; border: 1px solid #30363d; }
-        .stat-value { font-size: 1.8rem; font-weight: 700; color: #58a6ff; }
-        .stat-label { font-size: 0.75rem; color: #8b949e; text-transform: uppercase; }
-        .status-good { color: #3fb950; }
-        .error-msg { color: #f85149; font-size: 0.8rem; padding: 10px; border: 1px solid #f85149; border-radius: 5px; }
+        #sidebar { padding: 20px; overflow-y: auto; border-right: 1px solid #333; background: #161b22; }
+        #map { width: 100%; height: 100%; background: #000; }
+        .stat-card { background: #0d1117; padding: 15px; border-radius: 8px; margin-bottom: 10px; border: 1px solid #30363d; }
+        .stat-value { font-size: 1.5rem; color: #58a6ff; font-family: monospace; }
+        .stat-label { font-size: 0.8rem; color: #8b949e; }
     </style>
 </head>
 <body>
 
 <div id="dashboard">
     <div id="sidebar">
-        <h2>Aurora Monitor</h2>
-        <div id="stats-container">Loading...</div>
+        <h2>Aurora Debug</h2>
+        <div id="status-msg" style="color: yellow; font-size: 0.8rem; margin-bottom: 10px;">Initializing...</div>
+        <div id="stats-container"></div>
     </div>
     <div id="map"></div>
 </div>
 
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script>
-    // --- 調整版 JavaScript ---
+    console.log("App Started");
+    const statusEl = document.getElementById('status-msg');
 
-    const map = L.map('map').setView([70, 0], 2); // 少し北極寄りに視点を変更
+    // 地図の初期化
+    const map = L.map('map').setView([70, 0], 2);
     L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', { attribution: '&copy; CartoDB' }).addTo(map);
     let auroraLayer = L.layerGroup().addTo(map);
+
+    // テスト用の赤い四角（地図が動いているか確認用）
+    L.rectangle([[65, -10], [75, 10]], {color: "red", weight: 1, fillOpacity: 0.3}).addTo(map)
+        .bindPopup("Test Area (North Pole)");
 
     const PROXY_BASE = "https://api.allorigins.win/get?url=";
 
     async function fetchJSON(url) {
+        console.log("Fetching:", url);
         const response = await fetch(`${PROXY_BASE}${encodeURIComponent(url)}`);
-        if (!response.ok) throw new Error('Network response was not ok');
+        if (!response.ok) throw new Error('Fetch failed for ' + url);
         const data = await response.json();
         return JSON.parse(data.contents);
     }
 
     async function updateDashboard() {
+        statusEl.innerText = "Fetching data...";
         try {
-            const magData = await fetchJSON('https://services.swpc.noaa.gov/products/solar-wind/mag-1-day.json').catch(e => null);
-            const plasmaData = await fetchJSON('https://services.swpc.noaa.gov/products/solar-wind/plasma-1-day.json').catch(e => null);
-            const auroraData = await fetchJSON('https://services.swpc.noaa.gov/json/aurora_forecast_30_minute.json').catch(e => null);
+            const magData = await fetchJSON('https://services.swpc.noaa.gov/products/solar-wind/mag-1-day.json');
+            const plasmaData = await fetchJSON('https://services.swpc.noaa.gov/products/solar-wind/plasma-1-day.json');
+            const auroraData = await fetchJSON('https://services.swpc.noaa.gov/json/aurora_forecast_30_minute.json');
 
-            let htmlContent = "";
+            console.log("Data received successfully");
 
-            if (magData) {
-                const latestMag = magData[magData.length - 1];
-                const bz = parseFloat(latestMag[4]);
-                htmlContent += `
-                    <div class="stat-card">
-                        <div class="stat-label">IMF Bz (磁場南北)</div>
-                        <div class="stat-value ${bz < 0 ? 'status-good' : ''}">${bz.toFixed(2)} nT</div>
-                        <div style="font-size:0.7rem">${bz < 0 ? '有利' : '不利'}</div>
-                    </div>`;
-            }
+            // 数値表示
+            const latestMag = magData[magData.length - 1];
+            const latestPlasma = plasmaData[plasmaData.length - 1];
+            
+            document.getElementById('stats-container').innerHTML = `
+                <div class="stat-card">
+                    <div class="stat-label">Bz</div>
+                    <div class="stat-value">${parseFloat(latestMag[4]).toFixed(2)} nT</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-label">Speed</div>
+                    <div class="stat-value">${parseFloat(latestPlasma[2]).toFixed(0)} km/s</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-label">Density</div>
+                    <div class="stat-value">${parseFloat(latestPlasma[1]).toFixed(1)} p/cm³</div>
+                </div>
+            `;
 
-            if (plasmaData) {
-                const latestPlasma = plasmaData[plasmaData.length - 1];
-                const speed = parseFloat(latestPlasma[2]);
-                const density = parseFloat(latestPlasma[1]);
-                htmlContent += `
-                    <div class="stat-card">
-                        <div class="stat-label">Solar Wind Speed</div>
-                        <div class="stat-value">${speed.toFixed(0)} km/s</div>
-                    </div>
-                    <div class="stat-card">
-                        <div class="stat-label">Particle Density</div>
-                        <div class="stat-value">${density.toFixed(1)} p/cm³</div>
-                    </div>`;
-            }
-
-            document.getElementById('stats-container').innerHTML = htmlContent || "No Data Available";
-
-            if (auroraData) {
-                drawAurora(auroraData);
-            }
+            drawAurora(auroraData);
+            statusEl.innerText = "Updated: " + new Date().toLocaleTimeString();
 
         } catch (e) {
-            console.error(e);
+            console.error("Critical Error:", e);
+            statusEl.innerText = "Error: " + e.message;
         }
     }
 
     function drawAurora(data) {
         auroraLayer.clearLayers();
-        // 描画感度を 1% 以上に引き下げ
-        data.coordinates.forEach(point => {
-            const prob = point[2];
-            if (prob > 1) { 
-                let color = '#00ff00';
-                if (prob > 20) color = '#ffff00';
-                if (prob > 50) color = '#ff0000';
+        const coords = data.coordinates;
+        console.log("Drawing aurora. Points:", coords.length);
 
-                L.rectangle([[point[1], point[0]], [point[1] + 2, point[0] + 2]], {
-                    color: color, 
-                    weight: 0, 
-                    fillOpacity: prob / 100, // 確率に応じて濃くする
+        let drawCount = 0;
+        coords.forEach(p => {
+            let lon = p[0]; 
+            let lat = p[1];
+            const prob = p[2];
+
+            // 重要：NOAAの経度 0~360 を Leafletの -180~180 に変換
+            if (lon > 180) lon -= 360;
+
+            if (prob > 0) {
+                drawCount++;
+                L.rectangle([[lat, lon], [lat + 2, lon + 2]], {
+                    color: '#00ff00',
+                    weight: 0,
+                    fillOpacity: Math.max(prob / 100, 0.1),
                     interactive: false
                 }).addTo(auroraLayer);
             }
         });
+        console.log("Actually drawn rectangles:", drawCount);
     }
 
     updateDashboard();
     setInterval(updateDashboard, 300000);
-
 </script>
 </body>
 </html>
-
