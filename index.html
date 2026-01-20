@@ -2,17 +2,20 @@
 <html lang="ja">
 <head>
     <meta charset="UTF-8">
-    <title>Aurora Live Monitor</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Aurora Live Monitor - Stable</title>
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
     <style>
-        body { font-family: sans-serif; margin: 0; background: #0d1117; color: #e6edf3; }
+        body { font-family: -apple-system, sans-serif; margin: 0; background: #0d1117; color: #e6edf3; }
         #dashboard { display: grid; grid-template-columns: 320px 1fr; height: 100vh; }
-        #sidebar { padding: 20px; overflow-y: auto; border-right: 1px solid #333; background: #161b22; }
+        #sidebar { padding: 20px; overflow-y: auto; border-right: 1px solid #30363d; background: #161b22; z-index: 1000; }
         #map { width: 100%; height: 100%; background: #000; }
-        .stat-card { background: #0d1117; padding: 15px; border-radius: 8px; margin-bottom: 10px; border: 1px solid #30363d; }
-        .stat-value { font-size: 1.5rem; color: #58a6ff; font-family: monospace; }
-        .stat-label { font-size: 0.8rem; color: #8b949e; }
+        .stat-card { background: #0d1117; padding: 15px; border-radius: 8px; margin-bottom: 12px; border: 1px solid #30363d; }
+        .stat-value { font-size: 1.6rem; font-weight: bold; color: #58a6ff; font-family: monospace; }
+        .stat-label { font-size: 0.75rem; color: #8b949e; text-transform: uppercase; margin-bottom: 4px; }
         .status-good { color: #3fb950; }
+        #status-msg { font-size: 0.8rem; margin-bottom: 15px; padding: 5px; border-radius: 4px; }
+        h2 { font-size: 1.2rem; margin-top: 0; border-bottom: 1px solid #30363d; padding-bottom: 10px; }
     </style>
 </head>
 <body>
@@ -20,111 +23,93 @@
 <div id="dashboard">
     <div id="sidebar">
         <h2>Aurora Monitor</h2>
-        <div id="status-msg" style="color: #3fb950; font-size: 0.8rem; margin-bottom: 10px;">Connecting...</div>
+        <div id="status-msg">Initializing...</div>
         <div id="stats-container"></div>
+        <div style="margin-top: 20px; font-size: 0.7rem; color: #484f58;">
+            ※地図が表示されない場合は太陽活動の静穏期です。
+        </div>
     </div>
     <div id="map"></div>
 </div>
 
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script>
-    // 1. 地図の初期化
-    // 地図の初期化などはそのまま
+    // 1. 地図のセットアップ
     const map = L.map('map').setView([70, 0], 2);
-    L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', { attribution: '&copy; CartoDB' }).addTo(map);
+    L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+        attribution: '&copy; CartoDB'
+    }).addTo(map);
     let auroraLayer = L.layerGroup().addTo(map);
 
+    // 2. 通信関数
     async function fetchJSON(url) {
-        // cache: "no-store" を追加して不完全なキャッシュを回避
         const response = await fetch(url, { cache: "no-store" });
-        if (!response.ok) throw new Error('HTTP Error: ' + response.status);
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
         return await response.json();
     }
 
+    // 3. メイン更新処理
     async function updateDashboard() {
         const statusEl = document.getElementById('status-msg');
-        statusEl.innerText = "Updating...";
+        const container = document.getElementById('stats-container');
+        statusEl.innerText = "Connecting to NOAA...";
+        statusEl.style.color = "yellow";
 
         try {
-            // 磁場データ
-            const magData = await fetchJSON('https://services.swpc.noaa.gov/products/solar-wind/mag-1-day.json').catch(e => {
-                console.warn("Mag data error:", e); return null;
-            });
-            
-            // プラズマデータ
-            const plasmaData = await fetchJSON('https://services.swpc.noaa.gov/products/solar-wind/plasma-1-day.json').catch(e => {
-                console.warn("Plasma data error:", e); return null;
-            });
+            // 個別にフェッチ（一つが死んでも他を生かす）
+            const mag = await fetchJSON('https://services.swpc.noaa.gov/products/solar-wind/mag-1-day.json').catch(e => null);
+            const plasma = await fetchJSON('https://services.swpc.noaa.gov/products/solar-wind/plasma-1-day.json').catch(e => null);
+            const aurora = await fetchJSON('https://services.swpc.noaa.gov/json/ovation_aurora_latest.json').catch(e => null);
 
-            // 表示の更新
-            if (magData && plasmaData) {
-                const latestMag = magData[magData.length - 1];
-                const latestPlasma = plasmaData[plasmaData.length - 1];
-                const bz = parseFloat(latestMag[4]);
+            // 数値表示の更新
+            let html = "";
+            if (mag && mag.length > 0) {
+                const val = mag[mag.length - 1];
+                const bz = parseFloat(val[4]);
+                html += `<div class="stat-card"><div class="stat-label">IMF Bz</div><div class="stat-value ${bz < 0 ? 'status-good' : ''}">${bz.toFixed(2)} nT</div></div>`;
+            }
+            if (plasma && plasma.length > 0) {
+                const val = plasma[plasma.length - 1];
+                html += `<div class="stat-card"><div class="stat-label">Wind Speed</div><div class="stat-value">${parseFloat(val[2]).toFixed(0)} km/s</div></div>`;
+                html += `<div class="stat-card"><div class="stat-label">Density</div><div class="stat-value">${parseFloat(val[1]).toFixed(1)} p/cm³</div></div>`;
+            }
+            container.innerHTML = html || "Data temporarily unavailable";
 
-                document.getElementById('stats-container').innerHTML = `
-                    <div class="stat-card">
-                        <div class="stat-label">IMF Bz (磁場南北)</div>
-                        <div class="stat-value ${bz < 0 ? 'status-good' : ''}">${bz.toFixed(2)} nT</div>
-                    </div>
-                    <div class="stat-card">
-                        <div class="stat-label">Solar Wind Speed</div>
-                        <div class="stat-value">${parseFloat(latestPlasma[2]).toFixed(0)} km/s</div>
-                    </div>
-                    <div class="stat-card">
-                        <div class="stat-label">Particle Density</div>
-                        <div class="stat-value">${parseFloat(latestPlasma[1]).toFixed(1)} p/cm³</div>
-                    </div>
-                `;
+            // 地図の更新
+            if (aurora && aurora.coordinates) {
+                drawAurora(aurora);
+                statusEl.innerText = "● Live: " + new Date().toLocaleTimeString();
+                statusEl.style.color = "#3fb950";
+            } else {
+                statusEl.innerText = "⚠ Map data error";
             }
 
-            // オーロラ予報データ（ここが一番壊れやすい）
-            try {
-                const auroraData = await fetchJSON('https://services.swpc.noaa.gov/json/aurora_forecast_30_minute.json');
-                drawAurora(auroraData);
-                statusEl.innerText = "Last Update: " + new Date().toLocaleTimeString();
-            } catch (auroraError) {
-                console.error("Aurora Map JSON error (incomplete data):", auroraError);
-                statusEl.innerText = "Map data incomplete, retrying next time...";
-            }
-
-        } catch (e) {
-            console.error("Global Error:", e);
-            statusEl.innerText = "Error: " + e.message;
-        }
-    }
-    
-    // drawAurora 関数はそのまま（前回のものを使用）
-            drawAurora(auroraData);
-            statusEl.innerText = "Last Update: " + new Date().toLocaleTimeString();
-
-        } catch (e) {
-            console.error(e);
-            statusEl.innerText = "Error: " + e.message;
+        } catch (err) {
+            console.error(err);
+            statusEl.innerText = "Connection Error";
             statusEl.style.color = "#f85149";
         }
     }
 
+    // 4. オーロラ描画処理
     function drawAurora(data) {
         auroraLayer.clearLayers();
         const coords = data.coordinates;
         
+        // 描画を最適化（データが多いため、確率10%以上に絞る）
         coords.forEach(p => {
             let lon = p[0];
-            let lat = p[1];
+            const lat = p[1];
             const prob = p[2];
 
-            if (lon > 180) lon -= 360;
-
-            if (prob > 2) { // 2%以上で描画
-                let color = '#00ff00';
-                if (prob > 20) color = '#ffff00';
-                if (prob > 50) color = '#ff0000';
-
+            if (prob > 10) { 
+                if (lon > 180) lon -= 360;
+                let color = prob > 50 ? '#ff4500' : (prob > 25 ? '#ffff00' : '#00ff00');
+                
                 L.rectangle([[lat, lon], [lat + 2, lon + 2]], {
                     color: color,
                     weight: 0,
-                    fillOpacity: Math.max(prob / 100, 0.15),
+                    fillOpacity: prob / 100,
                     interactive: false
                 }).addTo(auroraLayer);
             }
@@ -132,8 +117,8 @@
     }
 
     updateDashboard();
-    setInterval(updateDashboard, 300000); // 5分ごと
+    setInterval(updateDashboard, 300000); // 5分周期
 </script>
+
 </body>
 </html>
-
