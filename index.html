@@ -1,0 +1,98 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Aurora Monitor v2</title>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <style>
+        body { font-family: sans-serif; margin: 0; background: #0d1117; color: #e6edf3; }
+        #dashboard { display: grid; grid-template-columns: 320px 1fr; height: 100vh; }
+        #sidebar { padding: 24px; overflow-y: auto; border-right: 1px solid #30363d; background: #161b22; z-index: 1000; }
+        #map { width: 100%; height: 100%; background: #0a0e14; }
+        .stat-card { background: #0d1117; padding: 16px; border-radius: 10px; margin-bottom: 16px; border: 1px solid #30363d; }
+        .stat-value { font-size: 1.8rem; font-weight: 700; color: #58a6ff; }
+        .stat-label { font-size: 0.75rem; color: #8b949e; text-transform: uppercase; }
+        .status-good { color: #3fb950; }
+        .error-msg { color: #f85149; font-size: 0.8rem; padding: 10px; border: 1px solid #f85149; border-radius: 5px; }
+    </style>
+</head>
+<body>
+
+<div id="dashboard">
+    <div id="sidebar">
+        <h2>Aurora Monitor</h2>
+        <div id="stats-container">Loading...</div>
+    </div>
+    <div id="map"></div>
+</div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+    const map = L.map('map').setView([60, 0], 2);
+    L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', { attribution: '&copy; CartoDB' }).addTo(map);
+    let auroraLayer = L.layerGroup().addTo(map);
+
+    // 比較的安定しているプロキシ
+    const PROXY_BASE = "https://api.allorigins.win/get?url=";
+
+    async function fetchJSON(url) {
+        const response = await fetch(`${PROXY_BASE}${encodeURIComponent(url)}`);
+        if (!response.ok) throw new Error('Network response was not ok');
+        const data = await response.json();
+        // alloriginsは結果を文字列で返すのでパースが必要
+        return JSON.parse(data.contents);
+    }
+
+    async function updateDashboard() {
+        try {
+            // 個別に取得（一つ失敗しても他を表示できるように）
+            const magData = await fetchJSON('https://services.swpc.noaa.gov/products/solar-wind/mag-1-day.json').catch(e => null);
+            const plasmaData = await fetchJSON('https://services.swpc.noaa.gov/products/solar-wind/plasma-1-day.json').catch(e => null);
+            const auroraData = await fetchJSON('https://services.swpc.noaa.gov/json/aurora_forecast_30_minute.json').catch(e => null);
+
+            if (!magData || !plasmaData) {
+                document.getElementById('stats-container').innerHTML = `<p class="error-msg">NOAAの数値データ取得に失敗しました。時間をおいて試してください。</p>`;
+            } else {
+                const latestMag = magData[magData.length - 1];
+                const latestPlasma = plasmaData[plasmaData.length - 1];
+                const bz = parseFloat(latestMag[4]);
+                
+                document.getElementById('stats-container').innerHTML = `
+                    <div class="stat-card">
+                        <div class="stat-label">IMF Bz (磁場南北)</div>
+                        <div class="stat-value ${bz < 0 ? 'status-good' : ''}">${bz.toFixed(2)} nT</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-label">Speed</div>
+                        <div class="stat-value">${parseFloat(latestPlasma[2]).toFixed(0)} km/s</div>
+                    </div>
+                `;
+            }
+
+            if (auroraData) {
+                drawAurora(auroraData);
+            }
+
+        } catch (e) {
+            console.error(e);
+            document.getElementById('stats-container').innerHTML = `<p class="error-msg">Fatal Error: ${e.message}</p>`;
+        }
+    }
+
+    function drawAurora(data) {
+        auroraLayer.clearLayers();
+        data.coordinates.forEach(point => {
+            if (point[2] > 10) {
+                L.rectangle([[point[1], point[0]], [point[1] + 2, point[0] + 2]], {
+                    color: '#00ff00', weight: 0, fillOpacity: point[2] / 150, interactive: false
+                }).addTo(auroraLayer);
+            }
+        });
+    }
+
+    updateDashboard();
+    setInterval(updateDashboard, 300000);
+</script>
+</body>
+</html>
